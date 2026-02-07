@@ -1,136 +1,335 @@
-const { Client, GatewayIntentBits, Collection, ChannelType, PermissionsBitField, ButtonBuilder, ButtonStyle, ActionRowBuilder, EmbedBuilder, StringSelectMenuBuilder, SlashCommandBuilder } = require("discord.js");
+const { 
+    Client, GatewayIntentBits, Collection, ChannelType, 
+    PermissionsBitField, ButtonBuilder, ButtonStyle, 
+    ActionRowBuilder, EmbedBuilder, StringSelectMenuBuilder, 
+    SlashCommandBuilder 
+} = require("discord.js");
 const fs = require("fs");
+const path = require("path");
 require("dotenv").config();
 
-// Servidor para manter o Replit acordado
+// Servidor HTTP para manter o Replit Online 24/7
 const http = require('http');
-http.createServer((req, res) => { res.write('NEXUS APOSTAS ONLINE'); res.end(); }).listen(8080);
+http.createServer((req, res) => { 
+    res.write('NEXUS APOSTAS - SISTEMA ONLINE'); 
+    res.end(); 
+}).listen(8080);
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildMembers],
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers,
+    ],
 });
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const GUILD_ID = process.env.GUILD_ID;
 
+// Configurações Padrão (Podem ser alteradas via /config_bot)
 let botConfig = {
-  LOGO_URL: "https://i.imgur.com/vH9X6N8.png",
-  EMBED_COLOR: "#FFD700",
-  DESCRIPTION_TEXT: "Clique no botão abaixo para entrar na fila!",
-  TAXA_ADM: 0.25
+    LOGO_URL: "https://i.imgur.com/vH9X6N8.png",
+    EMBED_COLOR: "#FFD700",
+    DESCRIPTION_TEXT: "🔥 Bem-vindo ao NEXUS APOSTAS! Escolha seu modo e entre na disputa. A emoção do Free Fire começa aqui!",
+    TAXA_ADM: 0.25
 };
 
 let pixKeys = {};
 let activeBets = new Collection();
-let playerQueue = []; // { id, user, modo, valor, tipo, messageId }
+let playerQueue = []; 
 let mediatorQueue = [];
 const adminSelections = new Collection();
 
-const DATA_FILE = './database.json';
+const DATA_FILE = './nexus_database.json';
 
+// --- SISTEMA DE BANCO DE DADOS ---
 function loadData() {
-  try {
-    if (fs.existsSync(DATA_FILE)) {
-      const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-      pixKeys = data.pixKeys || {};
-      mediatorQueue = data.mediatorQueue || [];
-      botConfig = { ...botConfig, ...(data.botConfig || {}) };
-    }
-  } catch (e) { console.log("Erro ao carregar dados."); }
+    try {
+        if (fs.existsSync(DATA_FILE)) {
+            const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+            pixKeys = data.pixKeys || {};
+            mediatorQueue = data.mediatorQueue || [];
+            botConfig = { ...botConfig, ...(data.botConfig || {}) };
+            console.log("✅ Dados carregados com sucesso!");
+        }
+    } catch (e) { console.log("⚠️ Erro ao carregar banco de dados."); }
 }
 
 function saveData() {
-  try { fs.writeFileSync(DATA_FILE, JSON.stringify({ pixKeys, mediatorQueue, botConfig })); } catch (e) { console.log("Erro ao salvar dados."); }
+    try {
+        fs.writeFileSync(DATA_FILE, JSON.stringify({ pixKeys, mediatorQueue, botConfig }, null, 4));
+    } catch (e) { console.log("⚠️ Erro ao salvar banco de dados."); }
 }
 
+// --- REGISTRO DE COMANDOS ---
 client.once('ready', async () => {
-  console.log(`✅ NEXUS ONLINE: ${client.user.tag}`);
-  loadData();
-  const guild = client.guilds.cache.get(GUILD_ID);
-  if (guild) {
-    await guild.commands.set([
-      { name: 'painel_aposta', description: 'Cria o painel de apostas.' },
-      { name: 'fila_mediadores', description: 'Entra/Sai da fila de ADMs.', options: [{ name: 'acao', type: 3, description: 'entrar ou sair', required: true, choices: [{name:'Entrar',value:'entrar'},{name:'Sair',value:'sair'}]}] },
-      { name: 'ver_fila_mediadores', description: 'Mostra a fila de ADMs.' },
-      { name: 'pix_adm', description: 'Define PIX de um membro.', options: [{name:'membro',type:6,description:'O ADM',required:true},{name:'chave',type:3,description:'A chave',required:true}] },
-      { name: 'config_bot', description: 'Configura o bot.', options: [{name:'cor',type:3,description:'Cor hex'},{name:'logo',type:3,description:'URL da logo'},{name:'desc',type:3,description:'Descrição'},{name:'taxa',type:10,description:'Taxa ADM'}] }
-    ]);
-  }
+    console.log(`\n=================================`);
+    console.log(`🚀 NEXUS APOSTAS ONLINE`);
+    console.log(`🤖 Bot: ${client.user.tag}`);
+    console.log(`=================================\n`);
+    
+    loadData();
+    
+    const guild = client.guilds.cache.get(GUILD_ID);
+    if (guild) {
+        await guild.commands.set([
+            new SlashCommandBuilder().setName('painel_aposta').setDescription('Abre o menu de configuração de nova aposta.').toJSON(),
+            new SlashCommandBuilder().setName('setpix').setDescription('Configura sua chave PIX pessoal.').addStringOption(o => o.setName('chave').setDescription('Sua chave PIX').setRequired(true)).toJSON(),
+            new SlashCommandBuilder().setName('pix_adm').setDescription('Define a chave PIX de um membro (ADM).').addUserOption(o => o.setName('membro').setDescription('Selecione o ADM').setRequired(true)).addStringOption(o => o.setName('chave').setDescription('Chave PIX').setRequired(true)).toJSON(),
+            new SlashCommandBuilder().setName('fila_mediadores').setDescription('Entra ou sai da fila de mediadores.').addStringOption(o => o.setName('acao').setDescription('Escolha a ação').setRequired(true).addChoices({name:'Entrar na Fila',value:'entrar'},{name:'Sair da Fila',value:'sair'})).toJSON(),
+            new SlashCommandBuilder().setName('ver_fila_mediadores').setDescription('Exibe a fila atual de mediadores ranqueada.').toJSON(),
+            new SlashCommandBuilder().setName('config_bot').setDescription('Personaliza o visual das Embeds do bot.').addStringOption(o => o.setName('cor').setDescription('Cor Hexadecimal (Ex: #00FF00)')).addStringOption(o => o.setName('logo').setDescription('Link da URL da Logo')).addStringOption(o => o.setName('desc').setDescription('Texto da descrição')).addNumberOption(o => o.setName('taxa').setDescription('Valor da taxa ADM')).toJSON(),
+        ]);
+    }
 });
 
 client.on('interactionCreate', async (interaction) => {
-  if (interaction.isChatInputCommand()) {
-    if (interaction.commandName === 'painel_aposta') {
-      const row1 = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('sel_modo').setPlaceholder('Modo').addOptions({label:'1x1',value:'1x1'},{label:'2x2',value:'2x2'},{label:'4x4',value:'4x4'}));
-      const row2 = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('sel_valor').setPlaceholder('Valor').addOptions({label:'R$0,50',value:'0.50'},{label:'R$1,00',value:'1.00'},{label:'R$5,00',value:'5.00'}));
-      const row3 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('post_panel').setLabel('Postar').setStyle(ButtonStyle.Success));
-      await interaction.reply({ content: 'Configure:', components: [row1, row2, row3], ephemeral: true });
-      adminSelections.set(interaction.user.id, { modo: '1x1', valor: '0.50', tipo: 'Mobile' });
+    // --- COMANDOS SLASH ---
+    if (interaction.isChatInputCommand()) {
+        if (interaction.commandName === 'painel_aposta') {
+            if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) return interaction.reply({ content: '❌ Apenas administradores podem usar este comando.', ephemeral: true });
+            
+            const row1 = new ActionRowBuilder().addComponents(
+                new StringSelectMenuBuilder().setCustomId('sel_modo').setPlaceholder('🎮 Selecione o Modo de Jogo').addOptions(
+                    {label:'X1 (1vs1)', value:'1x1', emoji:'👤'},
+                    {label:'2x2', value:'2x2', emoji:'👥'},
+                    {label:'3x3', value:'3x3', emoji:'🥉'},
+                    {label:'4x4', value:'4x4', emoji:'🏅'}
+                )
+            );
+            const row2 = new ActionRowBuilder().addComponents(
+                new StringSelectMenuBuilder().setCustomId('sel_valor').setPlaceholder('💰 Selecione o Valor da Aposta').addOptions(
+                    {label:'R<LaTex>$ 0,50', value:'0.50'}, {label:'R$</LaTex> 1,00', value:'1.00'}, {label:'R<LaTex>$ 2,00', value:'2.00'},
+                    {label:'R$</LaTex> 5,00', value:'5.00'}, {label:'R<LaTex>$ 10,00', value:'10.00'}, {label:'R$</LaTex> 20,00', value:'20.00'},
+                    {label:'R<LaTex>$ 50,00', value:'50.00'}, {label:'R$</LaTex> 100,00', value:'100.00'}
+                )
+            );
+            const row3 = new ActionRowBuilder().addComponents(
+                new StringSelectMenuBuilder().setCustomId('sel_tipo').setPlaceholder('📱 Selecione o Tipo de Jogador').addOptions(
+                    {label:'Mobile', value:'Mobile', emoji:'📱'},
+                    {label:'Emulador', value:'Emulador', emoji:'💻'},
+                    {label:'Tático', value:'Tático', emoji:'🎯'}
+                )
+            );
+            const row4 = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('confirm_panel_post').setLabel('Postar Aposta no Canal').setStyle(ButtonStyle.Success).setEmoji('🚀')
+            );
+
+            adminSelections.set(interaction.user.id, { modo: '1x1', valor: '0.50', tipo: 'Mobile' });
+            await interaction.reply({ content: '🛠️ **Painel de Configuração NEXUS:**', components: [row1, row2, row3, row4], ephemeral: true });
+        }
+
+        if (interaction.commandName === 'ver_fila_mediadores') {
+            const embed = new EmbedBuilder()
+                .setTitle('👮 FILA DE MEDIADORES - NEXUS')
+                .setColor(botConfig.EMBED_COLOR)
+                .setThumbnail(botConfig.LOGO_URL)
+                .setTimestamp();
+            
+            const list = mediatorQueue.length > 0 
+                ? mediatorQueue.map((m, i) => `**<LaTex>${i+1}º Lugar** | <@$</LaTex>{m.id}>`).join('\n')
+                : '*A fila está vazia no momento.*';
+            
+            embed.setDescription(`Confira abaixo a ordem dos mediadores para as próximas partidas:\n\n${list}`);
+            await interaction.reply({ embeds: [embed] });
+        }
+
+        if (interaction.commandName === 'setpix') {
+            pixKeys[interaction.user.id] = interaction.options.getString('chave');
+            saveData();
+            await interaction.reply({ content: `✅ Sua chave PIX foi salva: \`${pixKeys[interaction.user.id]}\``, ephemeral: true });
+        }
+
+        if (interaction.commandName === 'pix_adm') {
+            const user = interaction.options.getUser('membro');
+            pixKeys[user.id] = interaction.options.getString('chave');
+            saveData();
+            await interaction.reply({ content: `✅ Chave PIX de <@${user.id}> atualizada com sucesso!`, ephemeral: true });
+        }
+
+        if (interaction.commandName === 'fila_mediadores') {
+            const acao = interaction.options.getString('acao');
+            if (acao === 'entrar') {
+                if (mediatorQueue.find(m => m.id === interaction.user.id)) return interaction.reply({ content: '❌ Você já está na fila!', ephemeral: true });
+                mediatorQueue.push({ id: interaction.user.id, name: interaction.user.username });
+            } else {
+                const idx = mediatorQueue.findIndex(m => m.id === interaction.user.id);
+                if (idx !== -1) mediatorQueue.splice(idx, 1);
+            }
+            saveData();
+            await interaction.reply({ content: `✅ Fila de mediadores atualizada!`, ephemeral: true });
+        }
+
+        if (interaction.commandName === 'config_bot') {
+            const cor = interaction.options.getString('cor');
+            const logo = interaction.options.getString('logo');
+            const desc = interaction.options.getString('desc');
+            const taxa = interaction.options.getNumber('taxa');
+            if (cor) botConfig.EMBED_COLOR = cor;
+            if (logo) botConfig.LOGO_URL = logo;
+            if (desc) botConfig.DESCRIPTION_TEXT = desc;
+            if (taxa !== null) botConfig.TAXA_ADM = taxa;
+            saveData();
+            await interaction.reply({ content: '✅ Configurações do bot atualizadas com sucesso!', ephemeral: true });
+        }
     }
-    if (interaction.commandName === 'ver_fila_mediadores') {
-      const embed = new EmbedBuilder().setTitle('👮 FILA DE MEDIADORES').setColor(botConfig.EMBED_COLOR).setThumbnail(botConfig.LOGO_URL)
-        .setDescription(mediatorQueue.length > 0 ? mediatorQueue.map((m, i) => `**${i+1}º** - <@${m.id}>`).join('\n') : 'Fila vazia.');
-      await interaction.reply({ embeds: [embed] });
-    }
-    // ... (outros comandos slash mantidos)
-  }
 
-  if (interaction.isStringSelectMenu()) {
-    const sel = adminSelections.get(interaction.user.id);
-    if (interaction.customId === 'sel_modo') sel.modo = interaction.values[0];
-    if (interaction.customId === 'sel_valor') sel.valor = interaction.values[0];
-    await interaction.update({ content: `Configurando: ${sel.modo} | R$${sel.valor}` });
-  }
-
-  if (interaction.isButton()) {
-    const [action, ...args] = interaction.customId.split('_');
-
-    if (action === 'post' && args[0] === 'panel') {
-      const sel = adminSelections.get(interaction.user.id);
-      const embed = new EmbedBuilder().setTitle('🔥 NEXUS APOSTAS 🔥').setColor(botConfig.EMBED_COLOR).setThumbnail(botConfig.LOGO_URL)
-        .setDescription(botConfig.DESCRIPTION_TEXT).addFields({name:'Modo',value:sel.modo,inline:true},{name:'Valor',value:`R$${sel.valor}`,inline:true},{name:'Fila',value:'Ninguém'});
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`join_<LaTex>${sel.modo}_$</LaTex>{sel.valor}`).setLabel('Entrar').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId('leave').setLabel('Sair').setStyle(ButtonStyle.Danger)
-      );
-      await interaction.channel.send({ embeds: [embed], components: [row] });
-      await interaction.update({ content: 'Postado!', components: [] });
+    // --- SELEÇÕES DO MENU ---
+    if (interaction.isStringSelectMenu()) {
+        const sel = adminSelections.get(interaction.user.id);
+        if (!sel) return;
+        if (interaction.customId === 'sel_modo') sel.modo = interaction.values[0];
+        if (interaction.customId === 'sel_valor') sel.valor = interaction.values[0];
+        if (interaction.customId === 'sel_tipo') sel.tipo = interaction.values[0];
+        await interaction.update({ content: `🛠️ **Configurando:** Modo: \`${sel.modo}\` | Valor: \`R<LaTex>$ $</LaTex>{sel.valor}\` | Tipo: \`${sel.tipo}\`` });
     }
 
-    if (action === 'join') {
-      if (playerQueue.find(p => p.id === interaction.user.id)) return interaction.reply({ content: 'Já está na fila!', ephemeral: true });
-      playerQueue.push({ id: interaction.user.id, user: interaction.user, modo: args[0], valor: args[1] });
-      
-      // Atualiza a Embed com o @
-      const embed = EmbedBuilder.from(interaction.message.embeds[0]);
-      embed.spliceFields(2, 1, { name: 'Fila', value: playerQueue.map(p => `<@${p.id}>`).join(', ') });
-      await interaction.update({ embeds: [embed] });
+    // --- BOTÕES ---
+    if (interaction.isButton()) {
+        const [action, ...args] = interaction.customId.split('_');
 
-      if (playerQueue.length >= 2) {
-        const p1 = playerQueue.shift(); const p2 = playerQueue.shift();
-        const med = mediatorQueue.shift(); if(med) mediatorQueue.push(med); saveData();
-        const channel = await interaction.guild.channels.create({
-          name: `💸-${p1.modo}-<LaTex>${p1.user.username}-vs-$</LaTex>{p2.user.username}`,
-          permissionOverwrites: [{ id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] }, { id: p1.id, allow: [PermissionsBitField.Flags.ViewChannel] }, { id: p2.id, allow: [PermissionsBitField.Flags.ViewChannel] }, ...(med ? [{ id: med.id, allow: [PermissionsBitField.Flags.ViewChannel] }] : [])]
-        });
-        activeBets.set(channel.id, { p1: p1.id, p2: p2.id, med: med?.id, valor: p1.valor, p1Conf: false, p2Conf: false });
-        channel.send({ content: `<@<LaTex>${p1.id}> <@$</LaTex>{p2.id}> <LaTex>${med ? `<@$</LaTex>{med.id}>` : ''}`, embeds: [new EmbedBuilder().setTitle('PARTIDA CRIADA').setDescription('Confirmem para ver o PIX.').setColor(botConfig.EMBED_COLOR)], components: [new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`conf_1_<LaTex>${channel.id}`).setLabel('Confirmar P1').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId(`conf_2_$</LaTex>{channel.id}`).setLabel('Confirmar P2').setStyle(ButtonStyle.Success))] });
-      }
-    }
+        // Postar aposta pública
+        if (action === 'confirm' && args[0] === 'panel') {
+            const sel = adminSelections.get(interaction.user.id);
+            const embed = new EmbedBuilder()
+                .setTitle('🔥 NEXUS APOSTAS - NOVA PARTIDA 🔥')
+                .setColor(botConfig.EMBED_COLOR)
+                .setThumbnail(botConfig.LOGO_URL)
+                .setDescription(botConfig.DESCRIPTION_TEXT)
+                .addFields(
+                    { name: '🎮 Modo', value: `\`${sel.modo}\``, inline: true },
+                    { name: '💰 Valor', value: `\`R<LaTex>$ $</LaTex>{sel.valor}\``, inline: true },
+                    { name: '📱 Tipo', value: `\`${sel.tipo}\``, inline: true },
+                    { name: '👥 Fila de Jogadores', value: '*Ninguém na fila ainda...*', inline: false }
+                )
+                .setFooter({ text: 'Clique nos botões abaixo para participar!' });
 
-    if (action === 'leave') {
-      const idx = playerQueue.findIndex(p => p.id === interaction.user.id);
-      if (idx !== -1) {
-        playerQueue.splice(idx, 1);
-        const embed = EmbedBuilder.from(interaction.message.embeds[0]);
-        embed.spliceFields(2, 1, { name: 'Fila', value: playerQueue.length > 0 ? playerQueue.map(p => `<@${p.id}>`).join(', ') : 'Ninguém' });
-        await interaction.update({ embeds: [embed] });
-      } else {
-        await interaction.reply({ content: 'Você não está na fila.', ephemeral: true });
-      }
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`join_${sel.modo}_<LaTex>${sel.valor}_$</LaTex>{sel.tipo}`).setLabel('Entrar na Fila').setStyle(ButtonStyle.Primary).setEmoji('➡️'),
+                new ButtonBuilder().setCustomId('leave_player_queue').setLabel('Sair da Fila').setStyle(ButtonStyle.Danger).setEmoji('👋')
+            );
+
+            await interaction.channel.send({ embeds: [embed], components: [row] });
+            await interaction.update({ content: '✅ Aposta publicada!', components: [] });
+        }
+
+        // Entrar na fila de jogadores
+        if (action === 'join') {
+            if (playerQueue.find(p => p.id === interaction.user.id)) return interaction.reply({ content: '❌ Você já está na fila desta aposta!', ephemeral: true });
+            
+            playerQueue.push({ id: interaction.user.id, user: interaction.user, modo: args[0], valor: args[1], tipo: args[2] });
+            
+            // Atualiza a Embed principal com o @ do jogador
+            const embed = EmbedBuilder.from(interaction.message.embeds[0]);
+            const queueText = playerQueue.map(p => `<@${p.id}>`).join(', ');
+            embed.spliceFields(3, 1, { name: '👥 Fila de Jogadores', value: queueText, inline: false });
+            
+            await interaction.update({ embeds: [embed] });
+
+            // Se atingir 2 jogadores, cria o canal
+            if (playerQueue.length >= 2) {
+                const p1 = playerQueue.shift();
+                const p2 = playerQueue.shift();
+                
+                // Mediador Automático
+                const med = mediatorQueue.shift();
+                if (med) mediatorQueue.push(med); // Vai para o fim da fila
+                saveData();
+
+                const guild = interaction.guild;
+                const channel = await guild.channels.create({
+                    name: `💸-${p1.modo}-<LaTex>${p1.user.username}-vs-$</LaTex>{p2.user.username}`,
+                    type: ChannelType.GuildText,
+                    permissionOverwrites: [
+                        { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+                        { id: p1.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
+                        { id: p2.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
+                        ...(med ? [{ id: med.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }] : [])
+                    ]
+                });
+
+                const betId = channel.id;
+                activeBets.set(betId, { p1: p1.id, p2: p2.id, med: med?.id, valor: p1.valor, p1Conf: false, p2Conf: false });
+
+                const embedMatch = new EmbedBuilder()
+                    .setTitle('🚀 PARTIDA ENCONTRADA!')
+                    .setColor(botConfig.EMBED_COLOR)
+                    .setThumbnail(botConfig.LOGO_URL)
+                    .addFields(
+                        { name: '👤 Jogador 1', value: `<@<LaTex>${p1.id}>`, inline: true },
+                        { name: '👤 Jogador 2', value: `<@$</LaTex>{p2.id}>`, inline: true },
+                        { name: '👮 Mediador', value: med ? `<@${med.id}>` : '*Nenhum ADM disponível*', inline: true }
+                    )
+                    .setDescription('**Ambos os jogadores devem clicar no botão abaixo para confirmar a aposta e liberar o PIX.**');
+
+                const rowMatch = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`conf_p1_${betId}`).setLabel(`Confirmar (<LaTex>${p1.user.username})`).setStyle(ButtonStyle.Success).setEmoji('✅'),
+                    new ButtonBuilder().setCustomId(`conf_p2_$</LaTex>{betId}`).setLabel(`Confirmar (<LaTex>${p2.user.username})`).setStyle(ButtonStyle.Success).setEmoji('✅'),
+                    new ButtonBuilder().setCustomId(`cancel_match_$</LaTex>{betId}`).setLabel('Cancelar Partida').setStyle(ButtonStyle.Danger).setEmoji('❌')
+                );
+
+                await channel.send({ content: `<@<LaTex>${p1.id}> <@$</LaTex>{p2.id}> <LaTex>${med ? `<@$</LaTex>{med.id}>` : ''}`, embeds: [embedMatch], components: [rowMatch] });
+                
+                // Limpa a fila na embed original para a próxima partida
+                const originalEmbed = EmbedBuilder.from(interaction.message.embeds[0]);
+                originalEmbed.spliceFields(3, 1, { name: '👥 Fila de Jogadores', value: '*Ninguém na fila ainda...*', inline: false });
+                await interaction.message.edit({ embeds: [originalEmbed] });
+            }
+        }
+
+        // Sair da fila de jogadores
+        if (action === 'leave' && args[0] === 'player') {
+            const idx = playerQueue.findIndex(p => p.id === interaction.user.id);
+            if (idx !== -1) {
+                playerQueue.splice(idx, 1);
+                const embed = EmbedBuilder.from(interaction.message.embeds[0]);
+                const queueText = playerQueue.length > 0 ? playerQueue.map(p => `<@${p.id}>`).join(', ') : '*Ninguém na fila ainda...*';
+                embed.spliceFields(3, 1, { name: '👥 Fila de Jogadores', value: queueText, inline: false });
+                await interaction.update({ embeds: [embed] });
+            } else {
+                await interaction.reply({ content: '❌ Você não está na fila!', ephemeral: true });
+            }
+        }
+
+        // Confirmação de Aposta
+        if (action === 'conf') {
+            const bet = activeBets.get(args[2]);
+            if (!bet) return;
+
+            if (args[1] === 'p1' && interaction.user.id === bet.p1) bet.p1Conf = true;
+            if (args[1] === 'p2' && interaction.user.id === bet.p2) bet.p2Conf = true;
+
+            await interaction.reply({ content: '✅ Você confirmou sua participação!', ephemeral: true });
+
+            if (bet.p1Conf && bet.p2Conf) {
+                const pix = pixKeys[bet.med] || '⚠️ O ADM não configurou a chave PIX.';
+                const valorBase = parseFloat(bet.valor);
+                const total = (valorBase + botConfig.TAXA_ADM).toFixed(2);
+                const qr = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(pix)}`;
+
+                const embedPix = new EmbedBuilder()
+                    .setTitle('💵 PAGAMENTO DA APOSTA')
+                    .setColor('#00FF00')
+                    .setThumbnail(botConfig.LOGO_URL)
+                    .setDescription(`Realize o pagamento para o mediador da partida para iniciar o jogo.`)
+                    .addFields(
+                        { name: '🔑 Chave PIX', value: `\`<LaTex>${pix}\`` },
+                        { name: '💰 Valor Total', value: `\`R$</LaTex> <LaTex>${total}\` (Aposta: R$</LaTex>${valorBase.toFixed(2)} + Taxa: R$${botConfig.TAXA_ADM.toFixed(2)})` }
+                    )
+                    .setImage(qr)
+                    .setFooter({ text: 'Envie o comprovante aqui no chat após pagar.' });
+
+                await interaction.channel.send({ embeds: [embedPix] });
+            }
+        }
+
+        // Cancelar Partida
+        if (action === 'cancel' && args[0] === 'match') {
+            await interaction.channel.send('❌ **Partida cancelada.** O canal será excluído em 5 segundos...');
+            setTimeout(() => interaction.channel.delete(), 5000);
+        }
     }
-    // ... (lógica de confirmação e cancelamento mantida)
-  }
 });
 
 client.login(TOKEN);
